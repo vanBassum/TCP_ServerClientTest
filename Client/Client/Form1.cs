@@ -12,49 +12,59 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using MasterLibrary.Datasave.Serializers;
 using MasterLibrary.Ethernet;
+using System.Reflection;
 
 namespace Client
 {
     public partial class Form1 : Form
     {
 
-        MyClient client = new MyClient();
+
         public Form1()
         {
             InitializeComponent();
-            listBox1.DataSource = client.otherClients;
+
         }
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            client.Connect();
+
 
         }
 
         private void Button1_Click(object sender, EventArgs e)
         {
-            client.SendObject("meh");
+
         }
     }
 
-
-
-
-
-    public class MyClient : OthClient
+    public class Client : PropertySensitive
     {
-        public ThreadedBindingList<OthClient> otherClients { get; private set; }
+        public string Username { get => GetPar<string>(); set => SetPar(value); }
 
+        public override string ToString()
+        {
+            return Username;
+        }
+    }
+
+    public class Connector<T>
+    {
+        public T myClient = Activator.CreateInstance<T>();
+        public Dictionary<int, T> otherClients = new Dictionary<int, T>();
+
+        private int myId;
         private JSONIgnore serializer = new JSONIgnore();
         TcpSocketClientEscaped socket = new TcpSocketClientEscaped();
         private Timer sendChangesTimer = new Timer();
+        private Dictionary<string, object> changedPars = new Dictionary<string, object>();
 
-        public MyClient()
+        public Connector()
         {
             sendChangesTimer.Interval = 500;
             sendChangesTimer.Tick += SendChangesTimer_Tick;
+            ((PropertySensitive)myClient).PropertyChanged
         }
-
 
         public void Connect()
         {
@@ -71,35 +81,28 @@ namespace Client
             {
                 case SendId frame:
                     //Yaay we got an ID from the server.
-                    this.ID = frame.SenderID;
+                    myId = frame.ClientID;
                     sendChangesTimer.Start();
                     break;
 
                 case SendClientJoined frame:
                     //Someone joined the party.
-                    otherClients.Add(new OthClient { ID = frame.ClientId });
+                    otherClients[frame.ClientID] = Activator.CreateInstance<T>();
                     break;
 
                 case SendClientList frame:
-                    foreach (int id in frame.Clients)
-                    {
-                        if (!otherClients.Exists(c => c.ID == id))
-                            otherClients.Add(new OthClient { ID = id });
-                    }
+                    //Create clients, if already existed overwrite
+                    foreach(int id in frame.Clients)
+                        otherClients[id] = Activator.CreateInstance<T>();
                     break;
 
                 case SendClientLeft frame:
-                    otherClients.RemoveWhere(c => c.ID == frame.SenderID);
+                    otherClients.Remove(frame.ClientID);
                     break;
 
                 case SendParameterUpdate frame:
-                    RecievedUpdates(frame);
-                    break;
-
-                case SendObject frame:
-                    int ind = otherClients.FindIndex(c => c.ID == frame.SenderID);
-                    if (ind != -1)
-                        otherClients[ind].InvokeObjectRecieved(serializer.Deserialize(frame.serializedObject));
+                    foreach (KeyValuePair<string, object> kvp in frame.Parameters)
+                        typeof(T).GetProperty(kvp.Key).SetValue(otherClients[frame.ClientID], kvp.Value);
                     break;
 
                 default:
@@ -109,28 +112,9 @@ namespace Client
             }
         }
 
-        private void RecievedUpdates(SendParameterUpdate ud)
-        {
-
-            int ind = otherClients.FindIndex(c => c.ID == ud.SenderID);
-            if (ind == -1)
-            {
-                //Add client or not???
-            }
-            else
-            {
-                foreach (KeyValuePair<string, object> par in ud.Parameters)
-                {
-
-                    otherClients[ind].GetType().GetProperty(par.Key).SetValue(otherClients[ind], par.Value);
-                }
-            }
-
-        }
-
         private void SendChangesTimer_Tick(object sender, EventArgs e)
         {
-            SendFrame(new SendParameterUpdate(ID, GetChangedPars()));
+            //SendFrame(new SendParameterUpdate(ID, GetChangedPars()));
         }
 
         private void SendFrame(IFrame dataFrame)
@@ -138,32 +122,12 @@ namespace Client
             socket.SendPackage(serializer.Serialize(dataFrame));
         }
 
-        public void SendObject(object obj)
-        {
-            SendFrame(new SendObject(ID, serializer.Serialize(obj)));
-        }
     }
 
-    public class OthClient : Sync
-    {
-        public event Action<object> ObjectRecieved;
-        public int ID { get; set; }
-        public string Username { get => GetPar<string>(); set => SetPar(value); }
+    
 
-
-        public void InvokeObjectRecieved(object o)
-        {
-            ObjectRecieved?.Invoke(o);
-        }
-
-        public override string ToString()
-        {
-            return ID.ToString("##") + " " + Username;
-        }
-    }
-
-
-
+    /*
+    
     public class Sync : PropertySensitive
     {
         //Keep a list of changed parameters, so we can send them periodically
@@ -194,4 +158,5 @@ namespace Client
         }
     }
 
+    */
 }
