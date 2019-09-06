@@ -40,10 +40,10 @@ namespace Server
             Client client = new Client(socket, clients.Count < maxClients);
             client.Disposing += C_Disposed;
             client.RelayData += Client_RelayData;
-            client.SendFrame(new SendClientList(client.ID, (from c in clients select c.ID).ToList()));
+            client.SendFrame(new SendClientList(-1, (from c in clients select c.ID).ToList()));
             //Let the others know this client has joined
             foreach (Client c in clients)
-                c.SendFrame(new SendClientJoined(client.ID));
+                c.SendFrame(new SendClientJoined(-1,client.ID));
 
             clients.Add(client);
         }
@@ -63,7 +63,7 @@ namespace Server
 
             //Let the others know this client has left
             foreach (Client c in clients)
-                c.SendFrame(new SendClientLeft(client.ID));
+                c.SendFrame(new SendClientLeft(-1, client.ID));
         }
 
         private void Button1_Click(object sender, EventArgs e)
