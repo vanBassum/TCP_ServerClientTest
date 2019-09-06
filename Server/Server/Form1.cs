@@ -8,7 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using MasterLibrary.Ethernet;
-using MasterLibrary.Ethernet.DataPackages;
+using MasterLibrary.Ethernet.Frames;
 using MasterLibrary.Misc;
 using MasterLibrary.Datasave.Serializers;
 using System.IO;
@@ -19,7 +19,7 @@ namespace Server
     public partial class Form1 : Form
     {
         int maxClients = 10;
-        TcpSocketListener serverSocket = new TcpSocketListener();
+        TcpSocketListener<TcpSocketClientEscaped> serverSocket = new TcpSocketListener<TcpSocketClientEscaped>();
         ThreadedBindingList<Client> clients;
 
         public Form1()
@@ -33,20 +33,37 @@ namespace Server
             listBox1.DataSource = clients;
             serverSocket.BeginListening(1000);
             serverSocket.OnClientAccept += ServerSocket_OnClientAccept;
-            
         }
 
-        private void ServerSocket_OnClientAccept(TcpSocketClient socket)
+        private void ServerSocket_OnClientAccept(TcpSocketClientEscaped socket)
         {
+            Client client = new Client(socket, clients.Count < maxClients);
+            client.Disposing += C_Disposed;
+            client.RelayData += Client_RelayData;
+            client.SendFrame(new SendClientList(client.ID, (from c in clients select c.ID).ToList()));
+            //Let the others know this client has joined
+            foreach (Client c in clients)
+                c.SendFrame(new SendClientJoined(client.ID));
 
-            Client c = new Client(socket, clients.Count < maxClients);
-            c.OnDisposed += C_Disposed;
-            clients.Add(c);
+            clients.Add(client);
         }
+
+        private void Client_RelayData(Client sender, IFrame frame)
+        {
+            //Let the others know this client has left
+            foreach (Client cient in clients.Where(c => c != sender))
+                cient.SendFrame(frame);
+        }
+
 
         private void C_Disposed(object sender, EventArgs e)
         {
-            clients.Remove(sender as Client);
+            Client client = sender as Client;
+            clients.Remove(client);
+
+            //Let the others know this client has left
+            foreach (Client c in clients)
+                c.SendFrame(new SendClientLeft(client.ID));
         }
 
         private void Button1_Click(object sender, EventArgs e)
@@ -56,67 +73,64 @@ namespace Server
     }
 
 
-    public class Client : PropertySensitive
+    public class Client : AutoIncID
     {
-        private TcpSocketClient socket;
+        private TcpSocketClientEscaped socket;
         private JSONIgnore serializer = new JSONIgnore();
-        private static int nextID = 0;
-        public int ID { get => GetPar<int>(); private set =>SetPar(value); }
-        public string Username { get => GetPar<string>(); private set => SetPar(value); }
 
-        public event EventHandler OnDisposed;
-       
+        public event EventHandler Disposing;                    //Is called before object is disposed!
+        public event Action<Client, IFrame> RelayData;          //Is called whebn client wants this frame resend to all other clients.
 
-        public Client(TcpSocketClient sock, bool accept)
-        {
-            ID = Interlocked.Increment(ref nextID);
-            
+
+        public Client(TcpSocketClientEscaped sock, bool accept)
+        {           
             socket = sock;
-            socket.OnConnected += Socket_OnConnected;
             socket.OnConnectionFailed += Socket_OnConnectionFailed;
             socket.OnConnectionTimeout += Socket_OnConnectionTimeout;
-            socket.OnDataRecieved += Socket_OnDataRecieved;
+            socket.OnPackageRecieved += Socket_OnPackageRecieved;
             socket.OnDisconnected += Socket_OnDisconnected;
 
             if(accept)
             {
                 //Send his welcome and ID
-                SendFrame(new SendID(ID));
+                SendFrame(new SendId(ID));
             }
             else
             {
                 //Send a connection decline and remove.
-
+                SendFrame(new SendDecline(ID));
+                Dispose();
             }
         }
 
-        public void SendFrame(Frame dataFrame)
+        private void Socket_OnPackageRecieved(object sender, byte[] data)
         {
-            socket.SendDataSync(serializer.Serialize(dataFrame));
+            IFrame f = serializer.Deserialize<IFrame>(data);
+
+            if (f.Relay)
+            {
+                RelayData?.Invoke(this, f);
+            }
+        }
+
+        public void SendFrame(IFrame dataFrame)
+        {
+            socket.SendPackage(serializer.Serialize(dataFrame));
 
         }
 
         void Dispose()
         {
-            OnDisposed?.Invoke(this, null);
+            Disposing?.Invoke(this, null);
+            //Dispose here VVV
+
+
         }
 
 
         private void Socket_OnDisconnected(object sender, EventArgs e)
         {
             Dispose();
-        }
-
-        private void Socket_OnDataRecieved(object sender, byte[] data)
-        {
-            Frame f = serializer.Deserialize<Frame>(data);
-
-            switch (f.CMD)
-            {
-                case Command.SendUsername:
-                    Username = (f as SendUsername).Username;
-                    break;
-            }
         }
 
         private void Socket_OnConnectionTimeout(object sender, EventArgs e)
@@ -129,14 +143,9 @@ namespace Server
             Dispose();
         }
 
-        private void Socket_OnConnected(object sender, EventArgs e)
-        {
-            throw new NotImplementedException();
-        }
-
         public override string ToString()
         {
-            return "Client " + ID.ToString("###") + " " + Username;
+            return "Client " + ID.ToString();
         }
     }
 

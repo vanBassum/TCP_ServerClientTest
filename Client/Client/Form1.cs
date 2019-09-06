@@ -1,25 +1,21 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.Data;
 using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using MasterLibrary.Ethernet;
-using MasterLibrary.Ethernet.DataPackages;
-using MasterLibrary.Misc;
-using MasterLibrary.Datasave.Serializers;
 using System.IO;
+using MasterLibrary.Ethernet.Frames;
+using MasterLibrary.Misc;
 
 namespace Client
 {
     public partial class Form1 : Form
     {
 
-        Connector client = new Connector();
-
+        Connector connector = new Connector();
+        ThreadedBindingList<Message> messages;
         public Form1()
         {
             InitializeComponent();
@@ -27,55 +23,59 @@ namespace Client
 
         private void Form1_Load(object sender, EventArgs e)
         {
-            client.Username = "just 'a' name";
-            client.Connect();
+            timer1.Start();
+            connector.Connect();
+            messages = new ThreadedBindingList<Message>();
+            connector.ObjectRecieved += Connector_ObjectRecieved;
+            listBox1.DataSource = connector.OtherClients;
+            listBox2.DataSource = messages;
         }
 
-        
-
-
-
-    }
-
-    public class Connector
-    {
-        private int myID;
-        public string Username { get; set; } = "unnamed";
-        private JSONIgnore serializer = new JSONIgnore();
-        TcpSocketClient socket = new TcpSocketClient();
-
-        public void Connect()
+        private void Connector_ObjectRecieved(Client arg1, object arg2)
         {
-            socket.BeginConnect("127.0.0.1", 1000, 1000);
-            socket.SetTcpKeepAlive(true, 1000, 100);
-            socket.OnDataRecieved += Socket_OnDataRecieved;
-        }
-
-        private void Socket_OnDataRecieved(object sender, byte[] data)
-        {
-            Frame f = serializer.Deserialize<Frame>(data);
-
-            switch (f.CMD)
+            switch(arg2)
             {
-                case Command.SendID:
-                    myID = (f as SendID).ID;
-                    SendFrame(new SendUsername(Username));
-                    break;
-                case Command.Decline:
-                    //connection was declined by server
-
+                case Message msg:
+                    messages.Add(msg);
                     break;
             }
-
-
-
+            
         }
 
-        public void SendFrame(Frame dataFrame)
+        private void Timer1_Tick(object sender, EventArgs e)
         {
-            socket.SendDataSync(serializer.Serialize(dataFrame));
+            connector.SendUpdates();
+        }
 
+        private void TextBox1_TextChanged(object sender, EventArgs e)
+        {
+            connector.MyClient.Username = textBox1.Text;
+        }
+
+        private void TextBox2_KeyUp(object sender, KeyEventArgs e)
+        {
+            if(e.KeyCode == Keys.Enter)
+            {
+                Message m = new Message();
+                m.Msg = textBox2.Text;
+                m.Name = connector.MyClient.Username;
+                messages.Add(m);
+                connector.SendObject(m);
+                textBox2.Text = "";
+            }
         }
     }
+
+    public class Message
+    {
+        public string Msg { get; set; }
+        public string Name { get; set; }
+
+        public override string ToString()
+        {
+            return Name + ": " + Msg;
+        }
+    }
+
 
 }
