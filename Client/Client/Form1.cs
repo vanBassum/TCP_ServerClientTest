@@ -19,12 +19,12 @@ namespace Client
         public Form1()
         {
             InitializeComponent();
-
         }
 
         private void Form1_Load(object sender, EventArgs e)
         {
             con = new TCP_Client<Client>();
+
             listBox1.DataSource = con.otherClients;
             con.Connect();
         }
@@ -35,17 +35,15 @@ namespace Client
         }
     }
 
-
-    
-
     public class Client : TCP_Object
     {
         public string Username { get => GetPar<string>(); set => SetPar(value); }
 
         public override string ToString()
         {
-            return Username;
+            return "Cl, " + Username;
         }
     }
-
 }
+
+
